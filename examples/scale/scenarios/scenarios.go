@@ -40,14 +40,23 @@ type GameScenario interface {
 	// Ticket creates a new ticket, with randomized parameters.
 	Ticket() *pb.Ticket
 
+	// Backfill creates a new backfill, with randomized parameters.
+	Backfill() *pb.Backfill
+
 	// Profiles lists all of the profiles that should run.
 	Profiles() []*pb.MatchProfile
 
 	// MatchFunction is the custom logic implementation of the match function.
-	MatchFunction(p *pb.MatchProfile, poolTickets map[string][]*pb.Ticket) ([]*pb.Match, error)
+	MatchFunction(p *pb.MatchProfile, poolBackfills map[string][]*pb.Backfill, poolTickets map[string][]*pb.Ticket) ([]*pb.Match, error)
 
 	// Evaluate is the custom logic implementation of the evaluator.
 	Evaluate(stream pb.Evaluator_EvaluateServer) error
+
+	// Backend is the custom logic implementation of the backend.
+	Backend() func(pb.BackendServiceClient, pb.FrontendServiceClient, *logrus.Entry) error
+
+	// Frontend is the custom logic implementation of the frontend.
+	Frontend() func(pb.FrontendServiceClient, *logrus.Entry) error
 }
 
 // ActiveScenario sets the scenario with preset parameters that we want to use for current Open Match benchmark run.
@@ -62,9 +71,11 @@ var ActiveScenario = func() *Scenario {
 	return &Scenario{
 		FrontendTotalTicketsToCreate: -1,
 		FrontendTicketCreatedQPS:     100,
+		Frontend:                     gs.Frontend,
 
 		BackendAssignsTickets: true,
 		BackendDeletesTickets: true,
+		Backend:               gs.Backend,
 
 		Ticket:   gs.Ticket,
 		Profiles: gs.Profiles,
@@ -87,22 +98,29 @@ type Scenario struct {
 	// TicketExtensionSize       int
 	// PendingTicketNumber       int
 	// MatchExtensionSize        int
-	FrontendTotalTicketsToCreate int // TotalTicketsToCreate = -1 let scale-frontend create tickets forever
-	FrontendTicketCreatedQPS     uint32
+	FrontendTotalTicketsToCreate   int // TotalTicketsToCreate = -1 let scale-frontend create tickets forever
+	FrontendTicketCreatedQPS       uint32
+	FrontendTotalBackfillsToCreate int
+	Frontend                       frontendFunction
 
 	// GameBackend Configs
 	// ProfileNumber      int
 	// FilterNumber       int
 	BackendAssignsTickets bool
 	BackendDeletesTickets bool
+	Backend               backendFunction
 
 	Ticket   func() *pb.Ticket
 	Profiles func() []*pb.MatchProfile
 
-	MMF       matchFunction
+	MMF                matchFunction
+	MMFTicketsPerMatch int
+
 	Evaluator evaluatorFunction
 }
 
+type frontendFunction func() func(pb.FrontendServiceClient, *logrus.Entry) error
+type backendFunction func() func(pb.BackendServiceClient, pb.FrontendServiceClient, *logrus.Entry) error
 type matchFunction func(*pb.RunRequest, pb.MatchFunction_RunServer) error
 type evaluatorFunction func(pb.Evaluator_EvaluateServer) error
 
@@ -122,7 +140,7 @@ func getQueryServiceGRPCClient() pb.QueryServiceClient {
 	return pb.NewQueryServiceClient(conn)
 }
 
-func queryPoolsWrapper(mmf func(req *pb.MatchProfile, pools map[string][]*pb.Ticket) ([]*pb.Match, error)) matchFunction {
+func queryPoolsWrapper(mmf func(req *pb.MatchProfile, poolBackfills map[string][]*pb.Backfill, poolTickets map[string][]*pb.Ticket) ([]*pb.Match, error)) matchFunction {
 	var q pb.QueryServiceClient
 	var startQ sync.Once
 
@@ -136,7 +154,12 @@ func queryPoolsWrapper(mmf func(req *pb.MatchProfile, pools map[string][]*pb.Tic
 			return err
 		}
 
-		proposals, err := mmf(req.GetProfile(), poolTickets)
+		poolBackfills, err := matchfunction.QueryBackfillPools(stream.Context(), q, req.GetProfile().GetPools())
+		if err != nil {
+			return err
+		}
+
+		proposals, err := mmf(req.GetProfile(), poolBackfills, poolTickets)
 		if err != nil {
 			return err
 		}
