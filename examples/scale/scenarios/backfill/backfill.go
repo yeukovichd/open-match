@@ -1,4 +1,4 @@
-package backfills
+package backfill
 
 import (
 	"context"
@@ -95,6 +95,7 @@ func (s *BackfillScenario) MatchFunction(p *pb.MatchProfile, poolBackfills map[s
 				Tickets:       tickets[0:num],
 				MatchProfile:  p.GetName(),
 				MatchFunction: "backfill",
+				Backfill: b,
 			})
 			tickets = tickets[num:]
 		}
@@ -245,7 +246,7 @@ func runFetchMatches(be pb.BackendServiceClient, p *pb.MatchProfile, matchesToAc
 
 	req := &pb.FetchMatchesRequest{
 		Config: &pb.FunctionConfig{
-			Host: "om-function",
+			Host: "open-match-function",
 			Port: 50502,
 			Type: pb.FunctionConfig_GRPC,
 		},

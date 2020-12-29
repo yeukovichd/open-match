@@ -19,6 +19,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
+	"open-match.dev/open-match/examples/scale/scenarios/backfill"
 	"open-match.dev/open-match/examples/scale/scenarios/battleroyal"
 	"open-match.dev/open-match/examples/scale/scenarios/firstmatch"
 	"open-match.dev/open-match/examples/scale/scenarios/teamshooter"
@@ -67,6 +68,7 @@ var ActiveScenario = func() *Scenario {
 	// so it's easier to run different scenarios without changing code.
 	gs = battleroyal.Scenario()
 	gs = teamshooter.Scenario()
+	gs = backfill.Scenario()
 
 	return &Scenario{
 		FrontendTotalTicketsToCreate: -1,
