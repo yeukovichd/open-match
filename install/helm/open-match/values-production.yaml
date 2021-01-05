@@ -146,7 +146,7 @@ redis:
         cpu: 2
   sysctlImage:
     # Enable this setting in production if you are running Open Match under Linux environment
-    enabled: true
+    enabled: false
     mountHostSys: true
     # Redis may require some changes in the kernel of the host machine to work as expected,
     # in particular increasing the somaxconn value and disabling transparent huge pages.
@@ -176,16 +176,16 @@ open-match-core:
   # Length of time between first fetch matches call, and when no further fetch
   # matches calls will join the current evaluation/synchronization cycle,
   # instead waiting for the next cycle.
-  registrationInterval: 250ms
+  registrationInterval: 1s
   # Length of time after match function as started before it will be canceled,
   # and evaluator call input is EOF.
-  proposalCollectionInterval: 20s
+  proposalCollectionInterval: 10s
   # Time after a ticket has been returned from fetch matches (marked as pending)
   # before it automatically becomes active again and will be returned by query
   # calls.
-  pendingReleaseTimeout: 1m
+  pendingReleaseTimeout: 1h
   # Time after a ticket has been assigned before it is automatically delted.
-  assignedDeleteTimeout: 10m
+  assignedDeleteTimeout: 1h
   # Maximum number of tickets to return on a single QueryTicketsResponse.
   queryPageSize: 10000
 
@@ -293,3 +293,4 @@ global:
       prefix: "open_match"
     grafana:
       enabled: false
+

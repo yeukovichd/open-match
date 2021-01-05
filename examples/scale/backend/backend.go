@@ -48,8 +48,6 @@ var (
 	mSumTicketsReturned  = telemetry.Counter("scale_backend_sum_tickets_returned", "tickets in matches returned")
 	mMatchesAssigned     = telemetry.Counter("scale_backend_matches_assigned", "matches assigned")
 	mMatchAssignsFailed  = telemetry.Counter("scale_backend_match_assigns_failed", "match assigns failed")
-	mTicketsDeleted      = telemetry.Counter("scale_backend_tickets_deleted", "tickets deleted")
-	mTicketDeletesFailed = telemetry.Counter("scale_backend_ticket_deletes_failed", "ticket deletes failed")
 )
 
 // Run triggers execution of functions that continuously fetch, assign and
@@ -74,17 +72,14 @@ func run(cfg config.View) {
 	}
 
 	defer feConn.Close()
-	fe := pb.NewFrontendServiceClient(feConn)
 
 	w := logger.Writer()
 	defer w.Close()
 
 	matchesForAssignment := make(chan *pb.Match, 30000)
-	ticketsForDeletion := make(chan string, 30000)
 
 	for i := 0; i < 50; i++ {
-		go runAssignments(be, matchesForAssignment, ticketsForDeletion)
-		go runDeletions(fe, ticketsForDeletion)
+		go runAssignments(be, matchesForAssignment)
 	}
 
 	// Don't go faster than this, as it likely means that FetchMatches is throwing
@@ -114,7 +109,7 @@ func runFetchMatches(be pb.BackendServiceClient, p *pb.MatchProfile, matchesForA
 
 	req := &pb.FetchMatchesRequest{
 		Config: &pb.FunctionConfig{
-			Host: "om-function",
+			Host: "open-match-function",
 			Port: 50502,
 			Type: pb.FunctionConfig_GRPC,
 		},
@@ -150,7 +145,7 @@ func runFetchMatches(be pb.BackendServiceClient, p *pb.MatchProfile, matchesForA
 	}
 }
 
-func runAssignments(be pb.BackendServiceClient, matchesForAssignment <-chan *pb.Match, ticketsForDeletion chan<- string) {
+func runAssignments(be pb.BackendServiceClient, matchesForAssignment <-chan *pb.Match) {
 	ctx := context.Background()
 
 	for m := range matchesForAssignment {
@@ -177,31 +172,6 @@ func runAssignments(be pb.BackendServiceClient, matchesForAssignment <-chan *pb.
 			}
 
 			telemetry.RecordUnitMeasurement(ctx, mMatchesAssigned)
-		}
-
-		for _, id := range ids {
-			ticketsForDeletion <- id
-		}
-	}
-}
-
-func runDeletions(fe pb.FrontendServiceClient, ticketsForDeletion <-chan string) {
-	ctx := context.Background()
-
-	for id := range ticketsForDeletion {
-		if activeScenario.BackendDeletesTickets {
-			req := &pb.DeleteTicketRequest{
-				TicketId: id,
-			}
-
-			_, err := fe.DeleteTicket(context.Background(), req)
-
-			if err == nil {
-				telemetry.RecordUnitMeasurement(ctx, mTicketsDeleted)
-			} else {
-				telemetry.RecordUnitMeasurement(ctx, mTicketDeletesFailed)
-				logger.WithError(err).Error("failed to delete tickets")
-			}
 		}
 	}
 }
