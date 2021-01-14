@@ -44,7 +44,7 @@ var (
 	mRunnersCreating         = concurrentGauge(telemetry.Gauge("scale_frontend_runners_creating", "runners creating"))
 	mTicketsDeleted          = telemetry.Counter("scale_backend_tickets_deleted", "tickets deleted")
 	mTicketDeletesFailed     = telemetry.Counter("scale_backend_ticket_deletes_failed", "ticket deletes failed")
-	mTicketsTimeToAssignment = telemetry.HistogramWithBounds("scale_frontend_tickets_time_to_assignment", "tickets time to assignment", stats.UnitMilliseconds, []float64{0.01, 0.05, 0.1, 0.3, 0.6, 0.8, 1, 2, 3, 4, 5, 6, 8, 10, 13, 16, 20, 25, 30, 40, 50, 65, 80, 100, 130, 160, 200, 250, 300, 400, 500, 650, 800, 1000, 2000, 5000, 10000, 20000, 50000, 100000})
+	mTicketsTimeToAssignment = telemetry.HistogramWithBounds("scale_frontend_tickets_time_to_assignment", "tickets time to assignment", stats.UnitMilliseconds, []float64{0.01, 0.05, 0.1, 0.3, 0.6, 0.8, 1, 2, 3, 4, 5, 6, 8, 10, 13, 16, 20, 25, 30, 40, 50, 65, 80, 100, 130, 160, 200, 250, 300, 400, 500, 650, 800, 1000, 2000, 5000, 10000, 20000, 50000, 100000, 200000, 500000, 1000000})
 )
 
 // Run triggers execution of the scale frontend component that creates
@@ -67,24 +67,22 @@ func run(cfg config.View) {
 	ticketQPS := int(activeScenario.FrontendTicketCreatedQPS)
 	ticketTotal := activeScenario.FrontendTotalTicketsToCreate
 	totalCreated := 0
-	ticketsToWatch := make(chan ticketToWatch, 30000)
 	ticketsToDelete := make(chan string, 30000)
 
-	for i := 0; i < 100; i++ {
-		go runWatchAssignments(fe, ticketsToWatch, ticketsToDelete)
+	for i := 0; i < 50; i++ {
 		go runDeleteTickets(fe, ticketsToDelete)
 	}
 
 	for range time.Tick(time.Second) {
 		for i := 0; i < ticketQPS; i++ {
 			if ticketTotal == -1 || totalCreated < ticketTotal {
-				go runner(fe, ticketsToWatch)
+				go runner(fe, ticketsToDelete)
 			}
 		}
 	}
 }
 
-func runner(fe pb.FrontendServiceClient, ticketsToWatch chan<- ticketToWatch) {
+func runner(fe pb.FrontendServiceClient, ticketsToDelete chan<- string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -98,13 +96,22 @@ func runner(fe pb.FrontendServiceClient, ticketsToWatch chan<- ticketToWatch) {
 	time.Sleep(time.Duration(rand.Int63n(int64(time.Second))))
 
 	g.start(mRunnersCreating)
-	id, err := createTicket(ctx, fe, ticketsToWatch)
+	createdAt := time.Now()
+	id, err := createTicket(ctx, fe)
 	if err != nil {
 		logger.WithError(err).Error("failed to create a ticket")
 		return
 	}
 
-	_ = id
+	err = doWatchAssignments(ctx, fe, ticketToWatch{id: id, createdAt: createdAt})
+	if err != nil {
+		logger.WithError(err).Errorf("failed to get ticket assignment: %s", id)
+	} else {
+		ms := time.Since(createdAt).Nanoseconds() / 1e6
+		stats.Record(ctx, mTicketsTimeToAssignment.M(ms))
+	}
+
+	ticketsToDelete <- id
 }
 
 func runDeleteTickets(fe pb.FrontendServiceClient, ticketsToDelete <-chan string) {
@@ -122,47 +129,35 @@ func runDeleteTickets(fe pb.FrontendServiceClient, ticketsToDelete <-chan string
 }
 
 type ticketToWatch struct {
-	ticketId    string
-	requestedAt time.Time
+	id        string
+	createdAt time.Time
 }
 
-func runWatchAssignments(fe pb.FrontendServiceClient, ticketsToWatch chan ticketToWatch, ticketsToDelete chan<- string) {
-	for t := range ticketsToWatch {
-		ctx := context.Background()
-		stream, err := fe.WatchAssignments(ctx, &pb.WatchAssignmentsRequest{TicketId: t.ticketId})
-		if err != nil {
-			logger.WithError(err).Errorf("failed to get ticket assignment: %s", t.ticketId)
-			ticketsToDelete <- t.ticketId
-			continue
-		}
-
-		var a *pb.Assignment
-	outer:
-		for a.GetConnection() == "" {
-			resp, err := stream.Recv()
-			if err != nil {
-				logger.WithError(err).Errorf("failed to get ticket assignment: %s", t.ticketId)
-				break outer
-			}
-
-			a = resp.Assignment
-		}
-
-		err = stream.CloseSend()
-		if err != nil {
-			logger.WithError(err).Error("failed to close WatchAssignments stream")
-		}
-
-		if a.GetConnection() != "" {
-			ms := time.Since(t.requestedAt).Nanoseconds() / 1e6
-			stats.Record(ctx, mTicketsTimeToAssignment.M(ms))
-		}
-
-		ticketsToDelete <- t.ticketId
+func doWatchAssignments(ctx context.Context, fe pb.FrontendServiceClient, ticket ticketToWatch) error {
+	stream, err := fe.WatchAssignments(ctx, &pb.WatchAssignmentsRequest{TicketId: ticket.id})
+	if err != nil {
+		return err
 	}
+
+	var a *pb.Assignment
+	for a.GetConnection() == "" {
+		resp, err := stream.Recv()
+		if err != nil {
+			return err
+		}
+
+		a = resp.Assignment
+	}
+
+	err = stream.CloseSend()
+	if err != nil {
+		logger.WithError(err).Error("failed to close WatchAssignments stream")
+	}
+
+	return nil
 }
 
-func createTicket(ctx context.Context, fe pb.FrontendServiceClient, ticketsToWatch chan<- ticketToWatch) (string, error) {
+func createTicket(ctx context.Context, fe pb.FrontendServiceClient) (string, error) {
 	ctx, span := trace.StartSpan(ctx, "scale.frontend/CreateTicket")
 	defer span.End()
 
@@ -177,7 +172,6 @@ func createTicket(ctx context.Context, fe pb.FrontendServiceClient, ticketsToWat
 	}
 
 	telemetry.RecordUnitMeasurement(ctx, mTicketsCreated)
-	ticketsToWatch <- ticketToWatch{ticketId: resp.Id, requestedAt: time.Now()}
 	return resp.Id, nil
 }
 

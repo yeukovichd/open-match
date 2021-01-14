@@ -19,7 +19,6 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
-	"open-match.dev/open-match/examples/scale/scenarios/battleroyal"
 	"open-match.dev/open-match/examples/scale/scenarios/firstmatch"
 	"open-match.dev/open-match/examples/scale/scenarios/teamshooter"
 	"open-match.dev/open-match/internal/util/testing"
@@ -56,15 +55,15 @@ var ActiveScenario = func() *Scenario {
 
 	// TODO: Select which scenario to use based on some configuration or choice,
 	// so it's easier to run different scenarios without changing code.
-	gs = battleroyal.Scenario()
 	gs = teamshooter.Scenario()
+	//gs = battleroyal.Scenario()
 
 	return &Scenario{
 		FrontendTotalTicketsToCreate: -1,
-		FrontendTicketCreatedQPS:     100,
+		FrontendTicketCreatedQPS:     10,
 
 		BackendAssignsTickets: true,
-		BackendDeletesTickets: true,
+		BackendDeletesTickets: false,
 
 		Ticket:   gs.Ticket,
 		Profiles: gs.Profiles,
